@@ -98,6 +98,11 @@
                 </ul>
             </li>
             <li class="nav-item mb-2">
+                <a class="nav-link text-light {% if request.resolver_match.url_name == 'inventory-warnings' %}active{% endif %}" href="{% url 'inventory-warnings' %}">
+                    <i class="fa-solid fa-triangle-exclamation fa-fw me-2"></i> Inventory Warnings
+                </a>
+            </li>
+            <li class="nav-item mb-2">
                 <a class="nav-link text-light {% if request.resolver_match.url_name == 'saleslist' %}active{% endif %}" href="{% url 'saleslist' %}">
                     <i class="fa fa-shopping-bag fa-fw me-2"></i> Sales Orders
                 </a>

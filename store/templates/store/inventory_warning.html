@@ -1,0 +1,96 @@
+{% extends "store/base.html" %}
+{% load static %}
+{% load querystring from django_tables2 %}
+{% block title %}Inventory Warnings{% endblock title %}
+{% block content %}
+<div class="container">
+    <!-- Header Section -->
+    <div class="container my-4">
+        <div class="card shadow-sm rounded p-3">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <h4 class="display-6 mb-0 text-danger">
+                        <i class="fa-solid fa-triangle-exclamation"></i> Inventory Warnings
+                    </h4>
+                    <small class="text-muted">Low-stock and expiring items that need attention.</small>
+                </div>
+                <div class="col-md-6 d-flex justify-content-end gap-2">
+                    <a class="btn btn-success btn-sm rounded-pill shadow-sm" href="{% querystring '_export'='xlsx' %}">
+                        <i class="fa-solid fa-download"></i> Export to Excel
+                    </a>
+                </div>
+            </div>
+
+            <!-- Filter bar -->
+            <form class="row g-2 mt-3 align-items-end" role="search" method="get" action="{% url 'inventory-warnings' %}">
+                <div class="col-md-3">
+                    <label class="form-label mb-1 small text-muted">{{ filter.form.category.label }}</label>
+                    {{ filter.form.category }}
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label mb-1 small text-muted">{{ filter.form.vendor.label }}</label>
+                    {{ filter.form.vendor }}
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label mb-1 small text-muted">{{ filter.form.warning_type.label }}</label>
+                    {{ filter.form.warning_type }}
+                </div>
+                <div class="col-md-3 d-flex gap-2">
+                    <button class="btn btn-outline-success rounded-pill shadow-sm flex-grow-1" type="submit">
+                        <i class="fa-solid fa-filter"></i> Filter
+                    </button>
+                    <a class="btn btn-outline-secondary rounded-pill shadow-sm" href="{% url 'inventory-warnings' %}">
+                        Reset
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="px-4">
+        <table class="table table-bordered table-striped table-hover table-sm">
+            <thead class="thead-light">
+                <tr>
+                    <th scope="col">ID</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Quantity</th>
+                    <th scope="col">Price</th>
+                    <th scope="col">Supplier</th>
+                    <th scope="col">Expiring Date</th>
+                    <th scope="col">Warning</th>
+                    <th scope="col">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <th scope="row">{{ item.id }}</th>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.category }}</td>
+                    <td class="{% if item.is_low_stock %}text-danger fw-bold{% endif %}">{{ item.quantity }}</td>
+                    <td>{{ item.price }}</td>
+                    <td>{{ item.vendor }}</td>
+                    <td class="{% if item.is_expiring %}text-danger fw-bold{% endif %}">{{ item.expiring_date|default:"-" }}</td>
+                    <td>
+                        {% if item.is_low_stock %}<span class="badge bg-danger">Low stock</span>{% endif %}
+                        {% if item.is_expiring %}<span class="badge bg-warning text-dark">Expiring</span>{% endif %}
+                    </td>
+                    <td>
+                        <a class="btn btn-outline-info btn-sm" href="{% url 'product-update' item.slug %}">
+                            <i class="fa-solid fa-pen"></i> Edit
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="9" class="text-center text-muted py-4">
+                        No items currently need attention.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock content %}

@@ -135,3 +135,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
 CRISPY_TEMPLATE_PACK = "bootstrap5"
+
+# Inventory warning thresholds
+# Adjust these to control what the inventory warning page flags.
+# LOW_STOCK_THRESHOLD: items with quantity at or below this value are "low stock".
+# EXPIRY_ALERT_DAYS: items expiring within this many days (or already expired)
+# are flagged as "expiring soon".
+LOW_STOCK_THRESHOLD = 10
+EXPIRY_ALERT_DAYS = 30

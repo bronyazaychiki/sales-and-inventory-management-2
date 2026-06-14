@@ -36,13 +36,16 @@ from django.views.generic.edit import FormMixin
 from django_tables2 import SingleTableView
 import django_tables2 as tables
 from django_tables2.export.views import ExportMixin
+from django_filters.views import FilterView
 
 # Local app imports
 from accounts.models import Profile, Vendor
 from transactions.models import Sale
 from .models import Category, Item, Delivery
 from .forms import ItemForm, CategoryForm, DeliveryForm
-from .tables import ItemTable
+from .filters import InventoryWarningFilter
+from .tables import ItemTable, InventoryWarningTable
+from .warnings import warning_queryset
 
 
 @login_required
@@ -57,6 +60,11 @@ def dashboard(request):
     )
     items_count = items.count()
     profiles_count = profiles.count()
+
+    # Inventory warning counts for the dashboard cards
+    warnings = warning_queryset()
+    low_stock_count = warnings.filter(is_low_stock=True).count()
+    expiring_count = warnings.filter(is_expiring=True).count()
 
     # Prepare data for charts
     category_counts = Category.objects.annotate(
@@ -81,6 +89,8 @@ def dashboard(request):
         "profiles_count": profiles_count,
         "items_count": items_count,
         "total_items": total_items,
+        "low_stock_count": low_stock_count,
+        "expiring_count": expiring_count,
         "vendors": Vendor.objects.all(),
         "delivery": Delivery.objects.all(),
         "sales": Sale.objects.all(),
@@ -134,6 +144,28 @@ class ItemSearchListView(ProductListView):
                 )
             )
         return result
+
+
+class InventoryWarningListView(
+    LoginRequiredMixin, ExportMixin, tables.SingleTableMixin, FilterView
+):
+    """
+    View class to display low-stock and expiring items in one place.
+
+    Supports filtering by category, supplier (vendor) and warning type,
+    and exporting the current filtered result to Excel.
+    """
+
+    model = Item
+    table_class = InventoryWarningTable
+    filterset_class = InventoryWarningFilter
+    template_name = "store/inventory_warning.html"
+    context_object_name = "items"
+    export_name = "inventory_warnings"
+    table_pagination = False
+
+    def get_queryset(self):
+        return warning_queryset()
 
 
 class ProductDetailView(LoginRequiredMixin, FormMixin, DetailView):

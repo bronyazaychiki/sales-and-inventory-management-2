@@ -12,6 +12,7 @@ from .views import (
     ProductUpdateView,
     ProductDeleteView,
     ItemSearchListView,
+    InventoryWarningListView,
     DeliveryListView,
     DeliveryDetailView,
     DeliveryCreateView,
@@ -62,6 +63,13 @@ urlpatterns = [
         'search/',
         ItemSearchListView.as_view(),
         name='item_search_list_view'
+    ),
+
+    # Inventory warnings
+    path(
+        'inventory-warnings/',
+        InventoryWarningListView.as_view(),
+        name='inventory-warnings'
     ),
 
     # Delivery URLs

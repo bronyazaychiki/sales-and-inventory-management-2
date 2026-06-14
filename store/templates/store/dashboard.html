@@ -119,6 +119,50 @@
                             </div>
                         </a>
                     </div>
+                    <div class="col-xl-3 col-sm-6 col-12" id="low-stock">
+                        <a href="{% url 'inventory-warnings' %}?warning_type=low_stock">
+                            <div class="card shadow border-0">
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col">
+                                            <span class="h6 font-semibold text-muted text-sm d-block mb-2">Low stock</span>
+                                            <span class="h3 font-bold mb-0">{{low_stock_count}}</span>
+                                        </div>
+                                        <div class="col-auto">
+                                            <div class="icon icon-shape bg-danger text-white text-lg rounded-circle">
+                                                <i class="fa fa-triangle-exclamation"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 mb-0 text-sm">
+                                        <span class="text-nowrap text-xs text-muted">Items at or below threshold</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
+                    <div class="col-xl-3 col-sm-6 col-12" id="expiring">
+                        <a href="{% url 'inventory-warnings' %}?warning_type=expiring">
+                            <div class="card shadow border-0">
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col">
+                                            <span class="h6 font-semibold text-muted text-sm d-block mb-2">Expiring soon</span>
+                                            <span class="h3 font-bold mb-0">{{expiring_count}}</span>
+                                        </div>
+                                        <div class="col-auto">
+                                            <div class="icon icon-shape bg-warning text-white text-lg rounded-circle">
+                                                <i class="fa fa-hourglass-half"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 mb-0 text-sm">
+                                        <span class="text-nowrap text-xs text-muted">Expiring within the alert window</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </a>
+                    </div>
                 </div>
                 {% include 'store/charts.html' %}
             </div>
