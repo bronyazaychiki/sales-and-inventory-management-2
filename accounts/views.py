@@ -1,6 +1,7 @@
 # Django core imports
 from django.shortcuts import render, redirect
 from django.http import JsonResponse
+from django.db.models import Q
 from django.urls import reverse_lazy, reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -232,14 +233,34 @@ def is_ajax(request):
 @require_POST
 @login_required
 def get_customers(request):
-    if is_ajax(request) and request.method == 'POST':
-        term = request.POST.get('term', '')
-        customers = Customer.objects.filter(
-            name__icontains=term
-        ).values('id', 'name')
-        customer_list = list(customers)
-        return JsonResponse(customer_list, safe=False)
-    return JsonResponse({'error': 'Invalid request method'}, status=400)
+    """
+    Return customers matching the search term for the Select2 widget.
+
+    Searches the customer fields that actually exist (first/last name and
+    phone) and returns objects shaped as ``{"id", "text"}`` so the widget
+    can both render and select each result. An empty term returns the first
+    batch of customers so the dropdown is usable before the user types.
+    """
+    if not is_ajax(request):
+        return JsonResponse({'error': 'Not an AJAX request'}, status=400)
+
+    term = request.POST.get('term', '').strip()
+    customers = Customer.objects.all()
+    if term:
+        customers = customers.filter(
+            Q(first_name__icontains=term)
+            | Q(last_name__icontains=term)
+            | Q(phone__icontains=term)
+        )
+
+    results = []
+    for customer in customers.order_by('first_name', 'last_name')[:20]:
+        label = customer.get_full_name()
+        if customer.phone:
+            label = f"{label} ({customer.phone})"
+        results.append({'id': customer.id, 'text': label})
+
+    return JsonResponse(results, safe=False)
 
 
 class VendorListView(LoginRequiredMixin, ListView):

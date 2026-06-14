@@ -1,6 +1,7 @@
 # Standard library imports
 import json
 import logging
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 
 # Django core imports
 from django.http import JsonResponse, HttpResponse
@@ -26,6 +27,18 @@ from .forms import PurchaseForm
 
 
 logger = logging.getLogger(__name__)
+
+# Smallest money unit used to keep all Decimal math aligned with the
+# DecimalField(decimal_places=2) columns on the Sale/SaleDetail models.
+CENTS = Decimal("0.01")
+
+
+class SaleValidationError(Exception):
+    """Raised for user-facing validation problems while creating a sale.
+
+    The message is safe to show directly to the user; it is caught in
+    ``SaleCreateView`` and returned as a friendly error response.
+    """
 
 
 def is_ajax(request):
@@ -155,120 +168,184 @@ class SaleDetailView(LoginRequiredMixin, DetailView):
 
 
 def SaleCreateView(request):
-    context = {
-        "active_icon": "sales",
-        "customers": [c.to_select2() for c in Customer.objects.all()]
-    }
+    context = {"active_icon": "sales"}
 
-    if request.method == 'POST':
-        if is_ajax(request=request):
-            try:
-                # Load the JSON data from the request body
-                data = json.loads(request.body)
-                logger.info(f"Received data: {data}")
+    # Only AJAX POSTs submit a sale; everything else just renders the page.
+    if request.method != 'POST' or not is_ajax(request=request):
+        return render(
+            request, "transactions/sale_create.html", context=context
+        )
 
-                # Validate required fields
-                required_fields = [
-                    'customer', 'sub_total', 'grand_total',
-                    'amount_paid', 'amount_change', 'items'
-                ]
-                for field in required_fields:
-                    if field not in data:
-                        raise ValueError(f"Missing required field: {field}")
+    # --- Parse the request body ---
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({
+            'status': 'error',
+            'message': (
+                'We could not read the sale data. '
+                'Please refresh the page and try again.'
+            )
+        }, status=400)
 
-                # Create sale attributes
-                sale_attributes = {
-                    "customer": Customer.objects.get(id=int(data['customer'])),
-                    "sub_total": float(data["sub_total"]),
-                    "grand_total": float(data["grand_total"]),
-                    "tax_amount": float(data.get("tax_amount", 0.0)),
-                    "tax_percentage": float(data.get("tax_percentage", 0.0)),
-                    "amount_paid": float(data["amount_paid"]),
-                    "amount_change": float(data["amount_change"]),
-                }
+    logger.info(f"Received sale data: {data}")
 
-                # Use a transaction to ensure atomicity
-                with transaction.atomic():
-                    # Create the sale
-                    new_sale = Sale.objects.create(**sale_attributes)
-                    logger.info(f"Sale created: {new_sale}")
+    # --- Customer (required, must exist) ---
+    customer_id = data.get('customer')
+    if not customer_id:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Please select a customer before creating the sale.'
+        }, status=400)
+    try:
+        customer = Customer.objects.get(id=int(customer_id))
+    except (ValueError, TypeError, Customer.DoesNotExist):
+        return JsonResponse({
+            'status': 'error',
+            'message': (
+                'The selected customer could not be found. '
+                'Please pick a customer from the list.'
+            )
+        }, status=400)
 
-                    # Create sale details and update item quantities
-                    items = data["items"]
-                    if not isinstance(items, list):
-                        raise ValueError("Items should be a list")
+    # --- Items (must be a non-empty list) ---
+    items = data.get('items')
+    if not isinstance(items, list) or not items:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Please add at least one item to the sale.'
+        }, status=400)
 
-                    for item in items:
-                        if not all(
-                            k in item for k in [
-                                "id", "price", "quantity", "total_item"
-                            ]
-                        ):
-                            raise ValueError("Item is missing required fields")
+    # --- Tax percentage (0-100) ---
+    try:
+        tax_percentage = Decimal(str(data.get('tax_percentage') or '0'))
+    except InvalidOperation:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'The tax percentage must be a valid number.'
+        }, status=400)
+    if tax_percentage < 0 or tax_percentage > 100:
+        return JsonResponse({
+            'status': 'error',
+            'message': 'The tax percentage must be between 0 and 100.'
+        }, status=400)
 
-                        item_instance = Item.objects.get(id=int(item["id"]))
-                        if item_instance.quantity < int(item["quantity"]):
-                            raise ValueError(f"Not enough stock for item: {item_instance.name}")
+    # --- Amount paid (required, valid number) ---
+    try:
+        amount_paid = Decimal(str(data.get('amount_paid'))).quantize(
+            CENTS, rounding=ROUND_HALF_UP
+        )
+    except (InvalidOperation, TypeError):
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Please enter a valid amount paid.'
+        }, status=400)
 
-                        detail_attributes = {
-                            "sale": new_sale,
-                            "item": item_instance,
-                            "price": float(item["price"]),
-                            "quantity": int(item["quantity"]),
-                            "total_detail": float(item["total_item"])
-                        }
-                        SaleDetail.objects.create(**detail_attributes)
-                        logger.info(f"Sale detail created: {detail_attributes}")
+    # Totals are computed on the server from the stored item prices so the
+    # page, the submitted payload and the database always agree (and the
+    # client cannot tamper with prices or totals).
+    try:
+        with transaction.atomic():
+            new_sale = Sale.objects.create(
+                customer=customer,
+                tax_percentage=float(tax_percentage),
+            )
 
-                        # Reduce item quantity
-                        item_instance.quantity -= int(item["quantity"])
-                        item_instance.save()
+            sub_total = Decimal('0.00')
+            for raw_item in items:
+                try:
+                    item_instance = Item.objects.get(
+                        id=int(raw_item.get('id'))
+                    )
+                except (ValueError, TypeError, Item.DoesNotExist):
+                    raise SaleValidationError(
+                        'One of the items is no longer available. '
+                        'Please remove it and try again.'
+                    )
 
-                return JsonResponse(
-                    {
-                        'status': 'success',
-                        'message': 'Sale created successfully!',
-                        'redirect': '/transactions/sales/'
-                    }
+                try:
+                    quantity = int(raw_item.get('quantity'))
+                except (ValueError, TypeError):
+                    raise SaleValidationError(
+                        f'Please enter a valid quantity for '
+                        f'"{item_instance.name}".'
+                    )
+                if quantity < 1:
+                    raise SaleValidationError(
+                        f'The quantity for "{item_instance.name}" '
+                        f'must be at least 1.'
+                    )
+                if quantity > item_instance.quantity:
+                    raise SaleValidationError(
+                        f'Not enough stock for "{item_instance.name}": '
+                        f'only {item_instance.quantity} left, '
+                        f'but {quantity} requested.'
+                    )
+
+                price = Decimal(str(item_instance.price)).quantize(
+                    CENTS, rounding=ROUND_HALF_UP
+                )
+                total_detail = (price * quantity).quantize(
+                    CENTS, rounding=ROUND_HALF_UP
+                )
+                sub_total += total_detail
+
+                SaleDetail.objects.create(
+                    sale=new_sale,
+                    item=item_instance,
+                    price=price,
+                    quantity=quantity,
+                    total_detail=total_detail,
                 )
 
-            except json.JSONDecodeError:
-                return JsonResponse(
-                    {
-                        'status': 'error',
-                        'message': 'Invalid JSON format in request body!'
-                    }, status=400)
-            except Customer.DoesNotExist:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Customer does not exist!'
-                    }, status=400)
-            except Item.DoesNotExist:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': 'Item does not exist!'
-                    }, status=400)
-            except ValueError as ve:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'Value error: {str(ve)}'
-                    }, status=400)
-            except TypeError as te:
-                return JsonResponse({
-                    'status': 'error',
-                    'message': f'Type error: {str(te)}'
-                    }, status=400)
-            except Exception as e:
-                logger.error(f"Exception during sale creation: {e}")
-                return JsonResponse(
-                    {
-                        'status': 'error',
-                        'message': (
-                            f'There was an error during the creation: {str(e)}'
-                        )
-                    }, status=500)
+                # Reduce item stock now; rolled back automatically if any
+                # later validation in this transaction fails.
+                item_instance.quantity -= quantity
+                item_instance.save()
 
-    return render(request, "transactions/sale_create.html", context=context)
+            sub_total = sub_total.quantize(CENTS, rounding=ROUND_HALF_UP)
+            tax_amount = (
+                sub_total * tax_percentage / Decimal('100')
+            ).quantize(CENTS, rounding=ROUND_HALF_UP)
+            grand_total = (sub_total + tax_amount).quantize(
+                CENTS, rounding=ROUND_HALF_UP
+            )
+
+            if amount_paid < grand_total:
+                raise SaleValidationError(
+                    f'The amount paid ({amount_paid}) is less than the '
+                    f'grand total ({grand_total}).'
+                )
+
+            new_sale.sub_total = sub_total
+            new_sale.tax_amount = tax_amount
+            new_sale.grand_total = grand_total
+            new_sale.amount_paid = amount_paid
+            new_sale.amount_change = (amount_paid - grand_total).quantize(
+                CENTS, rounding=ROUND_HALF_UP
+            )
+            new_sale.save()
+            logger.info(f"Sale created: {new_sale}")
+
+    except SaleValidationError as ve:
+        return JsonResponse(
+            {'status': 'error', 'message': str(ve)}, status=400
+        )
+    except Exception as e:
+        logger.error(f"Exception during sale creation: {e}")
+        return JsonResponse({
+            'status': 'error',
+            'message': (
+                'Something went wrong while saving the sale. '
+                'Please try again.'
+            )
+        }, status=500)
+
+    return JsonResponse({
+        'status': 'success',
+        'message': 'Sale created successfully!',
+        'redirect': '/transactions/sales/'
+    })
 
 
 class SaleDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):

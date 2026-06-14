@@ -69,6 +69,10 @@ class Item(models.Model):
         product['id'] = self.id
         product['text'] = self.name
         product['category'] = self.category.name
+        # Real available stock, captured before `quantity` is reset to the
+        # default order quantity below. The sale page uses this to cap how
+        # many units can be added so over-selling is blocked client-side.
+        product['in_stock'] = self.quantity
         product['quantity'] = 1
         product['total_product'] = 0
         return product

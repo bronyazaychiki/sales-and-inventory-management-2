@@ -25,7 +25,7 @@
     </div>
 
     <!-- Sale items and details -->
-    <form id="form_sale" action="{% url 'sale-create' %}" class="saleForm" method="post">
+    <form id="form_sale" action="{% url 'sale-create' %}" class="saleForm" method="post" novalidate>
         <div class="row">
             <!-- Left column -->
             <div class="col-lg-8 mb-4">
@@ -77,11 +77,8 @@
                         {% csrf_token %}
                         <div class="mb-3">
                             <label for="customer" class="form-label">Customer</label>
-                            <select name="customer" class="form-select" id="customer" aria-label="Customer" required>
-                                <option value="" selected disabled hidden>Select the customer</option>
-                                {% for customer in customers %}
-                                <option value="{{ customer.value }}">{{ customer.label }}</option>
-                                {% endfor %}
+                            <select name="customer" class="form-select" id="customer" aria-label="Customer">
+                                <option></option>
                             </select>
                         </div>
                         <div class="mb-3">
@@ -89,8 +86,8 @@
                             <input name="sub_total" type="number" class="form-control" id="sub_total" aria-label="Subtotal" required>
                         </div>
                         <div class="mb-3">
-                            <label for="tax_percentage" class="form-label">Tax Inclusive (%)</label>
-                            <input name="tax_percentage" type="number" class="form-control" id="tax_percentage" aria-label="Tax Inclusive" value="0" required>
+                            <label for="tax_percentage" class="form-label">Tax (%)</label>
+                            <input name="tax_percentage" type="number" class="form-control" id="tax_percentage" aria-label="Tax" value="0" required>
                         </div>
                         <div class="mb-3">
                             <label for="tax_amount" class="form-label">Tax Amount</label>
@@ -160,20 +157,23 @@
             // Subtotal of all items added
             var sub_total = 0.00;
 
-            var tax_percentage = $('input[name="tax_percentage"]').val();
+            var tax_percentage = parseFloat($('input[name="tax_percentage"]').val()) || 0;
 
             // Calculates the total for each item
             $.each(this.products.items, function (pos, dict) {
                 dict.pos = pos;
+                // Keep the row number consistent after add / delete / reorder
+                dict.number = pos + 1;
                 dict.total_item = roundTo(dict.quantity * dict.price, 2);
                 // Add the item total to the sale subtotal
                 sub_total += roundTo(dict.total_item, 2);
             });
 
-            // Update the sale subtotal, grand total, and tax amount
+            // Tax is added on top of the subtotal:
+            // grand total = subtotal + tax amount
             this.products.sub_total = roundTo(sub_total, 2);
-            this.products.grand_total = roundTo(this.products.sub_total, 2);
             this.products.tax_amount = roundTo(this.products.sub_total * (tax_percentage / 100), 2);
+            this.products.grand_total = roundTo(this.products.sub_total + this.products.tax_amount, 2);
 
             $('input[name="sub_total"]').val(this.products.sub_total);
             $('input[name="tax_amount"]').val(this.products.tax_amount);
@@ -181,6 +181,42 @@
         },
         // Adds an item to the sale object
         add_item: function (item) {
+            // Available stock for this product (sent by the server as in_stock)
+            var inStock = parseInt(item.in_stock);
+            if (isNaN(inStock)) inStock = 0;
+
+            // Block items that have no stock at all
+            if (inStock < 1) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Out of stock',
+                    text: `"${item.name}" is currently out of stock.`
+                });
+                return;
+            }
+
+            // If the item is already in the sale, increase its quantity (capped
+            // at the available stock) instead of adding a duplicate row.
+            var existing = this.products.items.find(function (row) {
+                return String(row.id) === String(item.id);
+            });
+            if (existing) {
+                if (existing.quantity >= inStock) {
+                    Swal.fire({
+                        icon: 'info',
+                        title: 'Stock limit reached',
+                        text: `Only ${inStock} unit(s) of "${item.name}" are available.`
+                    });
+                } else {
+                    existing.quantity += 1;
+                }
+                this.list_item();
+                return;
+            }
+
+            // New item: normalise the stock/quantity fields before adding
+            item.in_stock = inStock;
+            item.quantity = 1;
             this.products.items.push(item);
             this.list_item();
         },
@@ -228,9 +264,12 @@
                     },
                 ],
                 rowCallback(row, data, displayNun, displayIndex, dataIndex) {
+                    // Cap the quantity spinner at the available stock for this item
+                    var maxStock = parseInt(data.in_stock);
+                    if (isNaN(maxStock) || maxStock < 1) maxStock = 1;
                     $(row).find("input[name='quantity']").TouchSpin({
                         min: 1,
-                        max: 100, // Máximo de acuerdo al stock de cada itemo
+                        max: maxStock,
                         step: 1,
                         decimals: 0,
                         boostat: 1,
@@ -256,31 +295,35 @@
             sale.calculate_sale();
         });
 
-        // Select2 customers
-        $('#searchbox_customers').select2({
+        // Select2 customer search, bound to the real #customer control so the
+        // selected value is part of the submitted form. minimumInputLength 0
+        // means the dropdown lists customers as soon as it is opened.
+        $('#customer').select2({
+            theme: 'bootstrap4',
+            width: '100%',
             delay: 250,
-            placeholder: "Select a customer",
+            placeholder: 'Search a customer',
             allowClear: true,
-            minimumInputLength: 1,
+            minimumInputLength: 0,
             ajax: {
                 url: "{% url 'get_customers' %}",
                 type: 'POST',
+                dataType: 'json',
                 data: function (params) {
                     return {
-                        term: params.term,
-                        csrfmiddlewaretoken: $('input[name="csrfmiddlewaretoken"]').val() // Include CSRF token
+                        term: params.term || '',
+                        csrfmiddlewaretoken: $('input[name="csrfmiddlewaretoken"]').val()
                     };
                 },
                 processResults: function (data) {
-                    return {
-                        results: data
-                    };
+                    return { results: data };
                 }
             }
         }).on('select2:select', function (e) {
-            // When a customer is selected
-            var data = e.params.data;
-            sale.products.customer = data.id;
+            // Remember the chosen customer id for the sale payload
+            sale.products.customer = e.params.data.id;
+        }).on('select2:clear', function () {
+            sale.products.customer = 0;
         });
 
         // Select2 items searchbox
@@ -346,16 +389,43 @@
                     Swal.fire('The item was eliminated!', '', 'success');
                 }
             });
-        }).on('change keyup', 'input[name="quantity"]', function () {
+        }).on('change keyup', 'input[name="quantity"]', function (event) {
             // When an item changes its quantity
-            var quantity = parseInt($(this).val());
             var tr = tblItems.cell($(this).closest('td, li')).index();
+            var row = sale.products.items[tr.row];
+            var inStock = parseInt(row.in_stock);
+            if (isNaN(inStock) || inStock < 1) inStock = 1;
+
+            var quantity = parseInt($(this).val());
+
+            // Keep the quantity within [1, available stock]
+            if (isNaN(quantity)) {
+                // Allow the field to be empty while typing; only coerce on blur
+                if (event.type === 'change') {
+                    quantity = 1;
+                    $(this).val(quantity);
+                } else {
+                    return;
+                }
+            } else if (quantity < 1) {
+                quantity = 1;
+                $(this).val(quantity);
+            } else if (quantity > inStock) {
+                quantity = inStock;
+                $(this).val(quantity);
+                Swal.fire({
+                    icon: 'info',
+                    title: 'Stock limit reached',
+                    text: `Only ${inStock} unit(s) of "${row.name}" are available.`
+                });
+            }
+
             // Update the item quantity in the sale object
-            sale.products.items[tr.row].quantity = quantity;
+            row.quantity = quantity;
             // Calculate the sale with the new quantity
             sale.calculate_sale();
             // Find the row to update the item total
-            $('td:eq(4)', tblItems.row(tr.row).node()).html(sale.products.items[tr.row].total_item + ' $');
+            $('td:eq(4)', tblItems.row(tr.row).node()).html(row.total_item + ' $');
         });
 
         // Delete all items
@@ -419,40 +489,83 @@
             });
         }
 
-        // Function to round numbers
-        function roundTo(value, decimals) {
-            const factor = Math.pow(10, decimals);
-            return Math.round(value * factor) / factor;
+        // Map common HTTP error codes to friendly fallback messages for cases
+        // where the server did not return a JSON message (network / 500 / etc).
+        function fallbackErrorMessage(xhr) {
+            if (xhr.responseJSON && xhr.responseJSON.message) {
+                return xhr.responseJSON.message;
+            }
+            if (xhr.status === 0) {
+                return 'Network error: please check your connection and try again.';
+            }
+            if (xhr.status === 403) {
+                return 'Your session may have expired. Please refresh the page and try again.';
+            }
+            if (xhr.status >= 500) {
+                return 'The server ran into a problem saving the sale. Please try again.';
+            }
+            return 'An error occurred while processing the sale. Please try again.';
         }
 
         // On form submit
         $('form#form_sale').on('submit', function (event) {
             event.preventDefault();
 
-            // Gather sale details
+            // Make sure the totals reflect the latest item / tax state
+            sale.calculate_sale();
+
+            var customer = $('select[name="customer"]').val();
             var amountPaid = parseFloat($('input[name="amount_paid"]').val());
-            var grandTotal = parseFloat($('input[name="grand_total"]').val());
+            var grandTotal = roundTo(sale.products.grand_total, 2);
+
+            // --- Validate before sending anything to the server ---
+            if (!customer) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Select a customer',
+                    text: 'Please choose a customer for this sale.'
+                });
+                return;
+            }
+            if (sale.products.items.length === 0) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'No items',
+                    text: 'Please add at least one item to the sale.'
+                });
+                return;
+            }
+            if (isNaN(amountPaid)) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Amount paid required',
+                    text: 'Please enter how much the customer paid.'
+                });
+                return;
+            }
+            if (amountPaid < grandTotal) {
+                Swal.fire({
+                    icon: 'warning',
+                    title: 'Insufficient payment',
+                    text: `The amount paid (${amountPaid.toFixed(2)}) is less than the grand total (${grandTotal.toFixed(2)}).`
+                });
+                return;
+            }
+
             var amountChange = roundTo(amountPaid - grandTotal, 2);
 
-            // Gather sale details
+            // Totals/prices are recomputed server-side; these are sent so the
+            // page, the payload and the database stay on the same numbers.
             var formData = {
-                customer: $('select[name="customer"]').val(),
-                sub_total: $('input[name="sub_total"]').val(),
+                customer: customer,
+                sub_total: sale.products.sub_total,
+                tax_percentage: parseFloat($('input[name="tax_percentage"]').val()) || 0,
+                tax_amount: sale.products.tax_amount,
                 grand_total: grandTotal,
                 amount_paid: amountPaid,
                 amount_change: amountChange,
                 items: sale.products.items
             };
-
-            // Check if amount_change is present
-            if (isNaN(amountChange)) {
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Error',
-                    text: 'Amount change is required!'
-                });
-                return;
-            }
 
             // Get CSRF token
             var csrftoken = $('input[name="csrfmiddlewaretoken"]').val();
@@ -467,21 +580,24 @@
                 },
                 data: JSON.stringify(formData),
                 success: function (response) {
-                    // Handle success response
+                    // Reset the sale form for the next order
                     sale.products.items = [];
+                    sale.products.customer = 0;
+                    number = 1;
                     sale.list_item();
                     $('form#form_sale').trigger('reset');
+                    $('#customer').val(null).trigger('change');
                     Swal.fire({
                         icon: 'success',
                         title: 'Success',
-                        text: 'Sale has been completed successfully!'
+                        text: (response && response.message) || 'Sale has been completed successfully!'
                     });
                 },
                 error: function (xhr) {
                     Swal.fire({
                         icon: 'error',
-                        title: 'Error',
-                        text: xhr.responseJSON.message || 'An error occurred while processing the sale!'
+                        title: 'Could not create the sale',
+                        text: fallbackErrorMessage(xhr)
                     });
                 }
             });
